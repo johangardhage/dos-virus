@@ -1,6 +1,6 @@
 # dos-virus
 
-Retro programming in Borland Turbo Assembler
+Retro programming in Borland Turbo Assembler 4
 
 ![Screenshot](/screenshots/tasm.png "Borland Turbo Assembler IDE")
 
@@ -8,53 +8,60 @@ Retro programming in Borland Turbo Assembler
 
 To build and run the Borland Turbo Assembler virus programs, you must first install the following tools:
 
-- [DOSBox](https://www.dosbox.com/download.php)
+- [DOSBox Staging](https://www.dosbox-staging.org/)
 - [Borland Turbo Assembler](https://winworldpc.com/product/turbo-assembler/4x)
 - [ASM Edit](http://www.o-love.net/asmedit/ae_down.html)
 
-### Install DOSBox
-
-#### openSUSE
-
-`$ sudo zypper install dosbox mtools p7zip-full`
+### Install DOSBox Staging
 
 #### Ubuntu
 
-`$ sudo apt install dosbox mtools p7zip-full`
+```
+$ sudo add-apt-repository ppa:feignint/dosbox-staging
+$ sudo apt update
+$ sudo apt install dosbox-staging 7zip
+```
+
+#### macOS
+
+```
+$ brew install dosbox-staging sevenzip
+```
 
 #### Configuration
 
-When starting `dosbox` the first time, the configuration file `~/.dosbox/dosbox-0.74-2.conf` will be generated
+When starting `dosbox-staging` the first time, the configuration file `dosbox-staging.conf` will be generated in
+
+- Ubuntu: `~/.config/dosbox/dosbox-staging.conf`
+- macOS: `~/Library/Preferences/DOSBox/dosbox-staging.conf`
 
 ### Install Borland Turbo Assembler
 
-1. Download `Borland Turbo Assembler 4.0 (3.5-1.44mb).7z`
-
-1. Create a directory which will contain the DOS C: drive
+1. Download [Borland Turbo Assembler 4.0 (3.5-1.44mb).7z](https://dl.winworldpc.com/Borland%20Turbo%20Assembler%204.0%20(3.5-1.44mb).7z)
    ```
-   $ mkdir ~/DOSBox
+   $ curl -o "Borland Turbo Assembler 4.0 (3.5-1.44mb).7z" "https://dl.winworldpc.com/Borland%20Turbo%20Assembler%204.0%20(3.5-1.44mb).7z"
    ```
 
 1. Extract the downloaded Borland Turbo Assembler archive
    ```
-   $ 7z x "Borland Turbo Assembler 4.0 (3.5-1.44mb).7z"
+   $ 7zz x "Borland Turbo Assembler 4.0 (3.5-1.44mb).7z"
    ```
 
 1. Extract the Borland Turbo Assembler disk images
    ```
-   $ cd "Borland Turbo Assembler 4.0 (3.5-1.44mb).7z"/
-   $ mkdir tasminst
-   $ for i in disk01.img disk02.img disk03.img; do echo $i; mcopy -m -i $i :: tasminst; done
+   $ cd "Borland Turbo Assembler 4.0 (3.5-1.44mb)"/
+   $ for i in *.img; do echo $i; 7zz x -y -otasminst $i; done
    ```
 
 1. Move the extracted files to the DOS C: drive
    ```
+   $ mkdir -p ~/DOSBox
    $ mv tasminst ~/DOSBox/
    ```
 
-1. Configure DOSBox
+1. Configure DOSBox Staging
 
-   Edit `~/.dosbox/dosbox-0.74-2.conf` and add the following autoexec options
+   Edit `dosbox-staging.conf` (see [Configuration](#configuration)) and add the following autoexec options
    ```
    [autoexec]
    mount c ~/DOSBox
@@ -62,9 +69,9 @@ When starting `dosbox` the first time, the configuration file `~/.dosbox/dosbox-
    c:
    ```
 
-1. Start `dosbox` and execute the Borland Turbo Assembler installation program
+1. Start `dosbox-staging` and execute the Borland Turbo Assembler installation program
    ```
-   $ dosbox
+   $ dosbox-staging
    C:\> cd tasminst
    C:\TASMINST> install.exe
    ```
@@ -94,7 +101,7 @@ When starting `dosbox` the first time, the configuration file `~/.dosbox/dosbox-
 
 1. Extract the downloaded ASM Edit archive
    ```
-   $ unzip aedt182b.zip -d aedtinst/
+   $ 7zz x aedt182b.zip -oaedtinst
    ```
 
 1. Move the extracted files to the DOS C: drive
@@ -102,17 +109,17 @@ When starting `dosbox` the first time, the configuration file `~/.dosbox/dosbox-
    $ mv aedtinst ~/DOSBox/
    ```
 
-1. Configure DOSBox
+1. Configure DOSBox Staging
 
-   Edit `~/.dosbox/dosbox-0.74-2.conf` and add the following autoexec options
+   Edit `dosbox-staging.conf` (see [Configuration](#configuration)) and add the following autoexec options
    ```
    [autoexec]
    path %PATH%;C:\ASMEDIT
    ```
 
-1. Start `dosbox` and execute the ASM Edit installation program
+1. Start `dosbox-staging` and execute the ASM Edit installation program
    ```
-   $ dosbox
+   $ dosbox-staging
    C:\> cd aedtinst
    C:\AEDTINST> install.exe
    ```
@@ -127,7 +134,7 @@ When starting `dosbox` the first time, the configuration file `~/.dosbox/dosbox-
 
 Link the `dos-virus` git repository to the DOS C: drive
 ```
-$ ln -s ~/git/github/dos-virus ~/DOSBox/virus
+$ ln -s ~/git/dos-virus ~/DOSBox/virus
 ```
 
 #### Build from DOS terminal
@@ -180,7 +187,7 @@ $ ln -s ~/git/github/dos-virus ~/DOSBox/virus
    [ ] Create backup files
    ```
 
-   Select `Save`
+   Select `Save ASMEDIT.DSK` to save the configuration
 
 1. Open virus source file
 

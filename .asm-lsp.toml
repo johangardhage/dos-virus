@@ -1,0 +1,18 @@
+# asm-lsp configuration (https://github.com/bergercookie/asm-lsp)
+#
+# These are 16-bit, Intel-syntax Borland TASM sources (MASM mode:
+# .model/.code/.startup). asm-lsp has no dedicated TASM backend, so we use
+# the MASM instruction/register documentation set, which is Intel-syntax and
+# the closest match, together with the x86 (16-bit) instruction set.
+[default_config]
+assembler = "masm"
+instruction_set = "x86"
+
+# Diagnostics are disabled: asm-lsp's assembler/compiler-based checks do not
+# understand 16-bit real-mode MASM/TASM directives (.model, .startup, segment
+# setup, @@ locals) and flag them as "unknown directive"/"invalid operand"
+# errors. Turning them off leaves hover and completion working. Note: these
+# options must live UNDER default_config (a top-level [opts] table is ignored).
+[default_config.opts]
+diagnostics = false
+default_diagnostics = false
