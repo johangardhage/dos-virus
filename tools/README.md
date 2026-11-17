@@ -50,3 +50,40 @@ With `--dosbox`, the real `INSTALL.EXE` is run in DOSBox Staging instead, and th
 | `--dosbox` | run the real `INSTALL.EXE` in DOSBox Staging; don't type into the DOSBox window |
 | `--headless` | run DOSBox without a window |
 | `--slowdown N` | make the pauses between typed keys N times longer, for slow machines |
+
+## run-tests.sh
+
+Build-checks all virus demos with TASM (in headless DOSBox Staging) and runs behavioural tests in isolated temporary directories.
+
+### Safety
+
+A virus only ever runs on an **isolated temporary drive** containing nothing but the test files. The DOS *tools* drive (`~/DOSBox`, where TASM lives) is mounted **only while assembling**, never while a virus executes, so a virus can never reach your real files. All work happens under `mktemp` directories that are removed on exit.
+
+### Usage
+
+```
+tools/run-tests.sh                     # build-check all demos + run every behavioural test
+tools/run-tests.sh virus01 ...         # only the named demos
+tools/run-tests.sh path/to/virusNN.asm # an arbitrary source file
+tools/run-tests.sh --dosbox [...]      # run behavioural tests on DOSBox instead of QEMU
+```
+
+By default the behavioural tests run on the **real MS-DOS kernel** booted from a disk image
+under QEMU; the guest has **no host filesystem access** at all, so a virus is fully boxed
+inside the throwaway image. Pass `--dosbox` to run them on a live-mounted DOSBox drive
+instead (faster to boot) — but DOSBox's built-in DOS isn't a real `INT 21h` chain, so the
+`INT 01h` tunneller demos (`virus06`–`09`) are build-checked only there. Builds always
+use DOSBox + TASM.
+
+The default (QEMU) run needs `qemu-system-i386`, `mtools` (host-side FAT access for
+injecting test files and reading results back, no DOSBox launch), and a bootable image
+(build it with `install-dos-tools.py msdosimg`).
+
+Environment overrides:
+
+- `DOS_TOOLS_DRIVE` — host dir mounted as `C:` for TASM (default `~/DOSBox`)
+- `DOSBOX` — dosbox binary (default `dosbox-staging`)
+- `QEMU` — qemu binary for `--qemu` (default `qemu-system-i386`)
+- `DOS_IMAGE` — bootable image for `--qemu` (default `$DOS_TOOLS_DRIVE/MSDOS.IMG`)
+- `QEMU_BOOT_TIMEOUT` — seconds to wait for each `--qemu` boot (default `40`)
+
