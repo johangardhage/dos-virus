@@ -201,6 +201,29 @@ $ ln -s ~/git/dos-virus ~/DOSBox/virus
 
    The virus programs will be located in the `C:\VIRUS\BUILD` directory
 
+## Tools & Tests
+
+Automated download/install scripts (`tools/download-dos-tools.sh`, `tools/install-dos-tools.py`) and the isolated behavioral test suite (`tools/run-tests.sh`, running under QEMU MS-DOS or DOSBox) are documented in [tools/README.md](tools/README.md).
+
+```
+$ tools/run-tests.sh
+```
+
+## Demos
+
+| Source | Target | Resident | Trigger | Encryption | Techniques |
+| --- | --- | --- | --- | --- | --- |
+| [virus01.asm](src/virus01.asm) | COM | No | Recursive directory scan | XOR | Full directory-tree traversal |
+| [virus02.asm](src/virus02.asm) | EXE | No | Parent-directory scan | XOR | Walks `..` to root and restores CWD |
+| [virus03.asm](src/virus03.asm) | COM | Yes | Execute (`4B00h`) | XOR | BIOS memory (`413h`) & direct IVT hook |
+| [virus04.asm](src/virus04.asm) | EXE | Yes | Execute (`4B00h`) | None | DOS MCB allocation & `INT 21h` hook (`2521h`) |
+| [virus05.asm](src/virus05.asm) | COM, EXE | Yes | Execute (`4B00h`) | XOR | DOS MCB allocation & `INT 21h` hook (`2521h`) |
+| [virus06.asm](src/virus06.asm) | COM | Yes | Execute (`4B00h`), FCB Find (`11h`/`12h`) | XOR | `INT 01h` tunneling, SFT r/w, filesize stealth (`11h`/`12h`/`4Eh`/`4Fh`) |
+| [virus07.asm](src/virus07.asm) | COM, EXE | Yes | Execute (`4B00h`) | XOR | `INT 01h` tunneling, filesize stealth, handle redirection (`45h`/`46h`), AV file deletion |
+| [virus08.asm](src/virus08.asm) | COM | Yes | Execute (`4B00h`), Close (`3Eh`) | XOR | `INT 01h` tunneling, SFT r/w, filesize stealth, disinfect on open (`3Dh`/`6C00h`), `INT 24h` |
+| [virus09.asm](src/virus09.asm) | COM | Yes | Execute (`4B00h`), Close (`3Eh`) | Polymorphic | `INT 01h` tunneling, SFT r/w, `INT 24h`, dynamic encryptor/decryptor generator |
+| [virus10.asm](src/virus10.asm) | MBR | No | Direct overwrite (`INT 13h`) | XOR | Preserves partition table, decrypts and chainloads active partition on boot |
+
 ## License
 
 Licensed under MIT license. See [LICENSE](LICENSE) for more information.

